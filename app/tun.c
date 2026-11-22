@@ -10,8 +10,11 @@
  *   STAB    a chord of up to four notes, two detuned saws each, a resonant low-pass with a short envelope
  *   BELL    four voices: FM (a sine on a sine) or a pluck (triangle and a triangle an octave up, a dark low-pass),
  *           with a slow warble
- * then:     each track's level and pan to the mix, its sends to a ping-pong delay and a reverb; the mix, the
- *           returns, the DJ filter, the drive, the volume.
+ *   SYNTH   four voices in the manner of a mid-80s one-oscillator polysynth: saw, pulse, a swept pulse, a swept
+ *           saw (the "hoover"), with a square sub, or sines; a resonant 24 dB low-pass, ADSR, and a stereo chorus
+ * then:     each track's level and pan to the mix, its sends to a ping-pong delay and a reverb; the kick ducks the
+ *           melodic tracks and the returns; the mix, the returns, the DJ filter, the compressor, the drive, the
+ *           volume.
  *
  * The sequencer counts 96 ticks a beat (internal, or 4 to each MIDI clock). Each track keeps its own step count and
  * plays step (count mod its length) at its own rate, so a 7-step loop rolls against a 16-step one. A deck's load and
@@ -20,13 +23,15 @@
 #include "fastmath.h"
 #include "plat.h"
 
+#define SYN_NWAVE 8                      /* the synth's waves (synth_render) */
 #define CR 32
 #define INV_SR (1.0f / TUN_SR)
 #define CR_DT ((float)CR * INV_SR)
 #define PPQN 96
 #define BAR (4 * PPQN)
 
-const char *const TUN_TRACK_NAME[TUN_TRACKS] = {"KICK", "SNARE", "CL HAT", "OP HAT", "PERC", "BASS", "STAB", "BELL"};
+const char *const TUN_TRACK_NAME[TUN_TRACKS] = {"KICK", "SNARE", "CL HAT", "OP HAT", "PERC", "BASS", "STAB", "BELL",
+                                                "SYNTH"};
 const char *const TUN_SND_NAME[TUN_TRACKS][TUN_NSND] = {
     {"TUNE", "DECAY", "PUNCH", "SWEEP", "CLICK", "DRIVE", "LOW CUT", "TAIL"},
     {"MODE", "TUNE", "DECAY", "NOISE", "SNAP", "TONE", "DRIVE", "SPREAD"},
@@ -36,21 +41,24 @@ const char *const TUN_SND_NAME[TUN_TRACKS][TUN_NSND] = {
     {"WAVE", "CUTOFF", "RES", "ENV", "DECAY", "ACCENT", "DRIVE", "GLIDE"},
     {"CHORD", "CUTOFF", "RES", "ENV", "DECAY", "DETUNE", "WAVE", "OCTAVE"},
     {"MODE", "RATIO", "TONE", "DECAY", "CUTOFF", "WARBLE", "OCTAVE", "SPREAD"},
+    {"WAVE", "CUTOFF", "RES", "ENV", "ATTACK", "DECAY", "SUSTAIN", "CHORUS"},
 };
 const uint8_t TUN_SND_MAX[TUN_TRACKS][TUN_NSND] = {
     {127, 127, 127, 127, 127, 127, 127, 127},
     {2, 127, 127, 127, 127, 127, 127, 127},
     {127, 127, 127, 127, 127, 0, 0, 0},
     {1, 127, 127, 127, 127, 127, 0, 0},
-    {4, 127, 127, 127, 127, 127, 0, 0},
-    {2, 127, 127, 127, 127, 127, 127, 127},
-    {7, 127, 127, 127, 127, 127, 2, 4},
+    {5, 127, 127, 127, 127, 127, 0, 0},  /* PERC: tom conga rim cowbell blip sine */
+    {4, 127, 127, 127, 127, 127, 127, 127},   /* BASS: saw square both sine sine+saw */
+    {7, 127, 127, 127, 127, 127, 3, 4},  /* STAB WAVE: saw pulse soft sine */
     {1, 15, 127, 127, 127, 127, 4, 127},
+    {SYN_NWAVE - 1, 127, 127, 127, 127, 127, 127, 127},
 };
 const char *const TUN_G_NAME[G_N] = {"BPM", "SWING", "KEY", "TIME", "FEEDBACK", "TONE", "SIZE", "DAMP", "SWEEP",
-                                     "DRIVE", "VOLUME", "RATE", "DEPTH", "DEST", "SHAPE"};
-const uint8_t TUN_G_MAX[G_N] = {200, 100, 11, 7, 127, 127, 127, 127, 127, 127, 127, 9, 127, 6, 3};
-const uint8_t TUN_G_MIN[G_N] = {60, 50, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0};
+                                     "DRIVE", "VOLUME", "RATE", "DEPTH", "DEST", "SHAPE", "COMP", "DUCK",
+                                     "DUCK REL"};
+const uint8_t TUN_G_MAX[G_N] = {200, 100, 11, 7, 127, 127, 127, 127, 127, 127, 127, 9, 127, 7, 3, 127, 127, 127};
+const uint8_t TUN_G_MIN[G_N] = {60, 50, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0};
 
 /* ------------------------------------------------------------------ helpers --- */
 static inline float rnd(uint32_t *s)
@@ -134,7 +142,7 @@ static tun_preset_t deck_next[NDECKS], preset_next;
 static volatile uint8_t deck_wait[NDECKS], preset_wait;
 static tun_perf_t F = {2, 1};
 static float morph;
-static uint8_t mutes;
+static uint16_t mutes;
 
 /* drums */
 typedef struct {
@@ -176,12 +184,34 @@ static bell_t L[NBELL];
 static uint32_t bell_age;
 static float warble_ph;
 
+/* the synth: four voices, one oscillator each (and its sub), a 24 dB low-pass of two state-variable stages */
+#define NSYN 4
+typedef struct {
+    float ph, sub, inc, scoop;           /* scoop: the swept saw's pitch rising into the note, semitones */
+    float env, fenv, vel, gate_left;
+    int stage;                           /* 0 idle, 1 attack, 2 decay / sustain, 3 release */
+    int note;
+    uint32_t age;
+    svf_t f1, f2;
+} syn_t;
+static syn_t Y[NSYN];
+static uint32_t syn_age;
+static float pwm_ph;
+#define CHO_LEN 2048u                    /* the chorus: 46 ms */
+#define CHO_MASK (CHO_LEN - 1u)
+static PLAT_POOL float cho_mem[CHO_LEN];
+static uint32_t cho_w;
+static float cho_ph;
+
+/* the duck: the kick's envelope, which the melodic tracks and the returns give way to */
+static float duck_env;
+
 /* the clock and the sequencer */
 static int playing;
 static float tick_frac;                  /* the part of a tick owed (single precision: the FM-1's FPU) */
 static uint32_t tick_i;                  /* whole ticks done */
 static uint32_t sn[TUN_TRACKS];          /* steps started a track */
-static int step_now[TUN_TRACKS] = {-1, -1, -1, -1, -1, -1, -1, -1};
+static int step_now[TUN_TRACKS];
 static uint8_t rat_left[TUN_TRACKS];
 static uint32_t rat_next[TUN_TRACKS], rat_gap[TUN_TRACKS];
 static float rat_vel[TUN_TRACKS];
@@ -253,6 +283,8 @@ static void kick_hit(float vel)
     d->tail = kn(s[7]) * 0.5f;
     d->burst_t = 0.0f;
     d->tailm = decay_mul(t_of(s[1], 0.3f, 3.0f));
+    if (vel > 0.3f)                      /* a ghost kick doesn't pump */
+        duck_env = 1.0f;
 }
 static void snare_hit(float vel)
 {
@@ -290,10 +322,10 @@ static void perc_hit(float vel, int note)
 {
     drum_t *d = &D[TK_PERC];
     const uint8_t *s = P.t[TK_PERC].snd;
-    static const float BASE[5] = {80.0f, 220.0f, 900.0f, 540.0f, 400.0f};
+    static const float BASE[6] = {80.0f, 220.0f, 900.0f, 540.0f, 400.0f, 160.0f};
     d->vel = vel;
     d->mode = s[0];
-    d->f0 = BASE[d->mode % 5] * fm_exp2f(kn(s[1]) * 2.0f - 1.0f + (float)note * (1.0f / 12.0f));
+    d->f0 = BASE[d->mode % 6] * fm_exp2f(kn(s[1]) * 2.0f - 1.0f + (float)note * (1.0f / 12.0f));
     d->env = 1.0f;
     d->envm = decay_mul(t_of(s[2], d->mode == 2 ? 0.01f : 0.04f, d->mode == 0 ? 1.4f : 0.6f));
     d->penv = kn(s[3]) * 2.0f;
@@ -381,6 +413,42 @@ static void bell_hit(float vel, int note)
     v->cph = v->mph = 0.0f;
 }
 
+static void synth_hit(float vel, int note, float gate)
+{
+    const uint8_t *s = P.t[TK_SYNTH].snd;
+    int i, best = 0;
+    uint32_t oldest = 0xFFFFFFFFu;
+    syn_t *v;
+    for (i = 0; i < NSYN; i++)           /* a free voice, else the oldest */
+        if (!Y[i].stage) {
+            best = i;
+            break;
+        } else if (Y[i].age < oldest) {
+            oldest = Y[i].age;
+            best = i;
+        }
+    v = &Y[best];
+    v->note = note;
+    v->age = ++syn_age;
+    v->inc = mtof(key_note(TK_SYNTH, note) + 12.0f) * INV_SR;
+    v->scoop = s[0] == 3 ? -5.0f : 0.0f;   /* the swept saw rises into its note */
+    v->vel = vel;
+    v->gate_left = gate;
+    v->stage = 1;
+    v->fenv = 0.0f;
+    if (v->env < 0.0001f) {
+        v->ph = 0.0f;
+        v->sub = 0.0f;
+    }
+}
+static void synth_release(int note)
+{
+    int i;
+    for (i = 0; i < NSYN; i++)
+        if (Y[i].stage && Y[i].stage < 3 && Y[i].note == note)
+            Y[i].gate_left = 0.0f;
+}
+
 static void trigger(int tr, float vel, int note, int slide, float gate)
 {
     switch (tr) {
@@ -390,6 +458,7 @@ static void trigger(int tr, float vel, int note, int slide, float gate)
     case TK_PERC: perc_hit(vel, note); break;
     case TK_BASS: bass_hit(vel, note, slide, gate); break;
     case TK_STAB: stab_hit(vel, note); break;
+    case TK_SYNTH: synth_hit(vel, note, gate); break;
     default: bell_hit(vel, note); break;
     }
 }
@@ -424,6 +493,12 @@ static void step_fire(int tr)
         gate = (float)dur * 0.55f * 60.0f / (bpm() * PPQN);   /* seconds */
         if (tr == TK_BASS && (nx->f & ST_SLIDE) && (nx->f & ST_ON))
             gate *= 1.9f;
+        if (tr == TK_SYNTH) {            /* the synth holds its note until the next step that plays */
+            int k = 1;
+            while (k < len && !(t->st[(idx + k) % len].f & ST_ON))
+                k++;
+            gate = ((float)(k * (int)dur) - 4.0f) * 60.0f / (bpm() * PPQN) / (float)((int)ST_RAT(st->f) + 1);
+        }
         trigger(tr, vel, st->note, (st->f & ST_SLIDE) != 0, gate);
         if (rat > 1) {
             rat_left[tr] = (uint8_t)(rat - 1);
@@ -437,7 +512,7 @@ static void step_fire(int tr)
 
 static void deck_apply(void)
 {
-    static const uint8_t FIRST[NDECKS] = {0, 5, 7}, LAST[NDECKS] = {4, 6, 7};
+    static const uint8_t FIRST[NDECKS] = {0, 5, 7}, LAST[NDECKS] = {4, 6, 8};
     int d, t;
     if (preset_wait) {
         P = preset_next;
@@ -516,6 +591,8 @@ static void events(void)
         case EV_OFF:
             if ((int)(a >> 8) == TK_BASS)
                 B.gate_left = 0.0f;
+            else if ((int)(a >> 8) == TK_SYNTH)
+                synth_release((int)(a & 0xFFu) - 64);
             break;
         case EV_PLAY: transport(1); break;
         case EV_STOP: transport(0); break;
@@ -549,6 +626,11 @@ static void events(void)
                 S[i].env = 0.0f;
             for (i = 0; i < NBELL; i++)
                 L[i].env = 0.0f;
+            for (i = 0; i < NSYN; i++) {
+                Y[i].env = 0.0f;
+                Y[i].stage = 0;
+            }
+            duck_env = 0.0f;
             break;
         }
         default: break;
@@ -583,7 +665,7 @@ static void lfo_run(void)
 static float lfo_to(int dest)            /* the LFO's octaves of cutoff for one destination */
 {
     int d = P.g[G_LFO_DEST];
-    if (d == 0 || !(d == dest || (d == 4 && dest >= 1 && dest <= 3)))
+    if (d == 0 || !(d == dest || (d == 4 && ((dest >= 1 && dest <= 3) || dest == 7))))
         return 0.0f;
     return lfo_val * kn(P.g[G_LFO_DEPTH]) * 3.0f;
 }
@@ -591,11 +673,12 @@ static float lfo_to(int dest)            /* the LFO's octaves of cutoff for one 
 /* ---------------------------------------------------------------- the voices --- */
 static float bufL[CR], bufR[CR], dlyL[CR], dlyR[CR], revS[CR];
 static float lvl_now[TUN_TRACKS];
+static float duck_g[CR];                 /* the duck's gain, each sample of the block: 1 none */
 
 static void mix_out(int tr, float x, int i)
 {
     const tun_track_t *t = &P.t[tr];
-    float lv = kn(t->level), p = ((float)t->pan - 64.0f) * (1.0f / 64.0f), gl = lv * (1.0f - fm_maxf(p, 0.0f)),
+    float lv = kn(t->level) * (tr >= TK_BASS ? duck_g[i] : 1.0f), p = ((float)t->pan - 64.0f) * (1.0f / 64.0f), gl = lv * (1.0f - fm_maxf(p, 0.0f)),
           gr = lv * (1.0f + fm_minf(p, 0.0f));
     bufL[i] += x * gl;
     bufR[i] += x * gr;
@@ -752,7 +835,8 @@ static void perc_render(int ns)
             x = svf_bp(&d->f1, (a + b) * 0.5f, fcb, 0.4f) * 1.6f;
             break;
         }
-        default: x = (d->ph < 0.5f ? 1.0f : -1.0f) * 0.5f; break;                                  /* blip */
+        case 4: x = (d->ph < 0.5f ? 1.0f : -1.0f) * 0.5f; break;                                   /* blip */
+        default: x = fm_sinf(FM_TWO_PI * d->ph) * (1.0f + tone * 0.6f * d->penv); break;           /* sine */
         }
         x = sat(x * drive) / fm_minf(drive, 2.0f);
         d->env *= d->envm;
@@ -795,7 +879,12 @@ static void bass_render(int ns)
             B.sub -= 1.0f;
         saw = 2.0f * B.ph - 1.0f - blep(B.ph, inc);
         sq = (B.ph < 0.5f ? 1.0f : -1.0f) + blep(B.ph, inc) - blep(wrap1(B.ph + 0.5f), inc);
-        x = wave == 0 ? saw : wave == 1 ? sq : 0.6f * (saw + sq);
+        if (wave >= 3) {                 /* the sines: pure, or a sine with a saw's edge */
+            float sn = fm_sinf(FM_TWO_PI * B.ph);
+            x = wave == 3 ? 1.3f * sn : sn + 0.45f * saw;
+        } else {
+            x = wave == 0 ? saw : wave == 1 ? sq : 0.6f * (saw + sq);
+        }
         x += 0.5f * fm_sinf(FM_TWO_PI * B.sub);
         sig = (1.0f - G) * (G3 * B.s[0] + G2 * B.s[1] + G * B.s[2] + B.s[3]);
         y4 = (G4 * x + sig) * D_;
@@ -843,6 +932,9 @@ static void stab_render(int ns)
             } else if (wave == 2) {      /* triangle-ish: soft */
                 a = 1.0f - 4.0f * fm_fabsf(v->ph[0] - 0.5f);
                 b = 1.0f - 4.0f * fm_fabsf(v->ph[1] - 0.5f);
+            } else if (wave == 3) {      /* sines, and a sine an octave up: an organ's stab */
+                a = fm_sin_turns(v->ph[0]) * 1.3f + 0.35f * fm_sin_turns(wrap1(2.0f * v->ph[0]));
+                b = fm_sin_turns(v->ph[1]) * 1.3f + 0.35f * fm_sin_turns(wrap1(2.0f * v->ph[1]));
             } else {
                 a = 2.0f * v->ph[0] - 1.0f - blep(v->ph[0], v->inc[0]);
                 b = 2.0f * v->ph[1] - 1.0f - blep(v->ph[1], v->inc[1]);
@@ -895,7 +987,7 @@ static void bell_render(int ns)
             x *= v->env * v->vel * 0.5f;
             {                            /* each voice its own place in the stereo field */
                 const tun_track_t *t = &P.t[TK_BELL];
-                float l = kn(t->level);
+                float l = kn(t->level) * duck_g[i];
                 bufL[i] += x * l * gl;
                 bufR[i] += x * l * gr;
                 dlyL[i] += x * l * kn(t->dly);
@@ -910,6 +1002,138 @@ static void bell_render(int ns)
             lv = v->env;
     }
     lvl_now[TK_BELL] = lv;
+}
+
+static inline float saw_bl(float ph, float inc) { return 2.0f * ph - 1.0f - blep(ph, inc); }
+static inline float pulse_bl(float ph, float inc, float pw)
+{
+    return (ph < pw ? 1.0f : -1.0f) + blep(ph, inc) - blep(wrap1(ph + 1.0f - pw), inc);
+}
+
+static void synth_render(int ns)
+{
+    static const float PWM_DEPTH[SYN_NWAVE] = {0.0f, 0.0f, 0.38f, 0.42f, 0.0f, 0.0f, 0.0f, 0.0f};
+    const tun_track_t *t = &P.t[TK_SYNTH];
+    const uint8_t *s = t->snd;
+    int i, j, wave = s[0] % SYN_NWAVE;
+    float q = 2.0f - 1.92f * kn(s[2]), envamt = kn(s[3]), sus = kn(s[6]), cho = kn(s[7]);
+    float ainc = INV_SR / t_of(s[4], 0.002f, 3.0f), dk = decay_mul(t_of(s[5], 0.06f, 8.0f)),
+          rk = decay_mul(t_of(s[5], 0.05f, 6.0f));
+    float base = 4.0f + kn(s[1]) * 6.8f + lfo_to(7) - morph * 2.5f, pw, lv = 0.0f, mono[CR];
+    int any = 0;
+    static int quiet;
+    pwm_ph += CR_DT * 0.8f;              /* the pulse's sweep: a slow 0.8 Hz */
+    if (pwm_ph >= 1.0f)
+        pwm_ph -= 1.0f;
+    pw = 0.5f + PWM_DEPTH[wave] * fm_sin_turns(pwm_ph);
+    for (i = 0; i < ns; i++)
+        mono[i] = 0.0f;
+    for (j = 0; j < NSYN; j++) {
+        syn_t *v = &Y[j];
+        float f, pm, inc, kt;
+        if (!v->stage)
+            continue;
+        any = 1;
+        if (v->stage < 3) {
+            v->gate_left -= (float)ns * INV_SR;
+            if (v->gate_left <= 0.0f)
+                v->stage = 3;
+        }
+        pm = v->scoop < -0.01f ? fm_exp2f(v->scoop * (1.0f / 12.0f)) : 1.0f;
+        v->scoop *= 0.93f;
+        inc = v->inc * pm;
+        kt = fm_log2f(v->inc * TUN_SR * (1.0f / 261.6f)) * 0.5f;   /* half key tracking, octaves from middle C */
+        f = svf_f(15.0f * fm_exp2f(fm_clampf(base + kt + envamt * 6.5f * v->env * (0.6f + 0.4f * v->vel), 0.0f, 10.3f)));
+        for (i = 0; i < ns; i++) {
+            float x, y;
+            v->ph += inc;
+            if (v->ph >= 1.0f)
+                v->ph -= 1.0f;
+            v->sub += inc * 0.5f;
+            if (v->sub >= 1.0f)
+                v->sub -= 1.0f;
+            switch (wave) {
+            case 0: x = saw_bl(v->ph, inc); break;
+            case 1: x = pulse_bl(v->ph, inc, 0.5f); break;
+            case 2: x = pulse_bl(v->ph, inc, pw); break;
+            case 3: x = 0.62f * (saw_bl(v->ph, inc) + saw_bl(wrap1(v->ph + pw), inc)); break;   /* the swept saw */
+            case 4: x = saw_bl(v->ph, inc) + 0.6f * pulse_bl(v->sub, inc * 0.5f, 0.5f); break;
+            case 5: x = pulse_bl(v->ph, inc, 0.5f) + 0.6f * pulse_bl(v->sub, inc * 0.5f, 0.5f); break;
+            case 6: x = 1.3f * fm_sin_turns(v->ph) + 0.5f * fm_sin_turns(v->sub); break;
+            default: x = fm_sin_turns(v->ph) + 0.4f * saw_bl(v->ph, inc); break;
+            }
+            y = svf_lp(&v->f1, x, f, 1.414f);
+            y = svf_lp(&v->f2, y, f, q);
+            y = sat(y * 1.2f);
+            mono[i] += y * v->env * (0.45f + 0.55f * v->vel) * 0.42f;
+            if (v->stage == 1) {
+                v->env += ainc;
+                if (v->env >= 1.0f) {
+                    v->env = 1.0f;
+                    v->stage = 2;
+                }
+            } else if (v->stage == 2) {
+                v->env = sus + (v->env - sus) * dk;
+            } else {
+                v->env *= rk;
+            }
+        }
+        if (v->stage == 3 && v->env < 0.0001f) {
+            v->stage = 0;
+            v->env = 0.0f;
+        }
+        v->f1.lp = fm_flush(v->f1.lp);
+        v->f1.bp = fm_flush(v->f1.bp);
+        v->f2.lp = fm_flush(v->f2.lp);
+        v->f2.bp = fm_flush(v->f2.bp);
+        if (v->env > lv)
+            lv = v->env;
+    }
+    lvl_now[TK_SYNTH] = lv;
+    if (any)
+        quiet = 0;
+    else if (++quiet > 80)               /* silent: the chorus line has emptied, rest */
+        return;
+    {                                    /* the chorus: two taps swept in opposite phase, one each side */
+        float rate = 0.4f + 0.5f * cho, depth = (0.0012f + 0.0026f * cho) * TUN_SR, mid = 0.0055f * TUN_SR;
+        float wet = cho > 0.001f ? 0.55f + 0.25f * cho : 0.0f, dry = 1.0f - 0.25f * wet;
+        float p = kn(t->pan) * 2.0f - 1.0f, lv2 = kn(t->level), gl = lv2 * (1.0f - fm_maxf(p, 0.0f)),
+              gr = lv2 * (1.0f + fm_minf(p, 0.0f));
+        for (i = 0; i < ns; i++) {
+            float x = mono[i], l = x * dry, r = x * dry;
+            cho_mem[cho_w & CHO_MASK] = x;
+            if (wet > 0.0f) {
+                float m = fm_sin_turns(cho_ph), d1 = mid + depth * m, d2 = mid - depth * m, a, b;
+                uint32_t i1 = (uint32_t)d1, i2 = (uint32_t)d2;
+                float f1 = d1 - (float)i1, f2 = d2 - (float)i2;
+                a = cho_mem[(cho_w - i1) & CHO_MASK] * (1.0f - f1) + cho_mem[(cho_w - i1 - 1u) & CHO_MASK] * f1;
+                b = cho_mem[(cho_w - i2) & CHO_MASK] * (1.0f - f2) + cho_mem[(cho_w - i2 - 1u) & CHO_MASK] * f2;
+                l += a * wet;
+                r += b * wet;
+            }
+            cho_w++;
+            cho_ph += rate * INV_SR;
+            if (cho_ph >= 1.0f)
+                cho_ph -= 1.0f;
+            bufL[i] += l * gl * duck_g[i];
+            bufR[i] += r * gr * duck_g[i];
+            dlyL[i] += (l + r) * 0.5f * lv2 * kn(t->dly) * duck_g[i];
+            revS[i] += (l + r) * 0.5f * lv2 * kn(t->rev) * duck_g[i];
+        }
+    }
+}
+
+static void duck_run(int ns)             /* the duck's gain for this block */
+{
+    float depth = kn(P.g[G_DUCK]), rel = (0.25f + 1.75f * kn(P.g[G_DUCK_REL])) * 60.0f / bpm(),
+          m = decay_mul(rel * 1.5f);
+    static float sm;
+    int i;
+    for (i = 0; i < ns; i++) {
+        sm += (duck_env - sm) * 0.02f;   /* a millisecond in: no click */
+        duck_env *= m;
+        duck_g[i] = 1.0f - depth * sm;
+    }
 }
 
 /* ---------------------------------------------------------------- effects --- */
@@ -938,6 +1162,9 @@ static void fx_render(int ns)
 {
     static const float DIV[8] = {0.125f, 0.25f, 0.3333f, 0.5f, 0.75f, 1.0f, 1.5f, 2.0f};
     float target = DIV[P.g[G_DLY_TIME] & 7] * 60.0f / bpm() * TUN_SR, fb, lpc, size, damp, sweep, drive, vol;
+    float comp, thr, slope, makeup;
+    static float comp_env;
+    const float comp_a = 0.0045f, comp_r = 0.00015f;   /* about 5 ms in, 150 ms out */
     int i;
     while (target > (float)DLY_LEN - 4.0f)
         target *= 0.5f;
@@ -952,6 +1179,10 @@ static void fx_render(int ns)
     sweep = ((float)P.g[G_SWEEP] - 64.0f) * (1.0f / 63.0f);
     drive = 1.0f + kn(P.g[G_DRIVE]) * 3.0f;
     vol = P.g[G_VOLUME] ? fm_exp2f(((float)P.g[G_VOLUME] - 100.0f) * (0.45f / 6.02f)) : 0.0f;
+    comp = kn(P.g[G_COMP]);
+    thr = -26.0f * comp;                 /* the threshold falls, the ratio rises (1.5 .. 6), half made up */
+    slope = 1.0f - 1.0f / (1.5f + 4.5f * comp);
+    makeup = -thr * slope * 0.5f;
     {                                    /* the sweep and the TUNNEL: a low-pass that closes, a high-pass that opens */
         float lpoct = sweep < 0.0f ? 10.4f + sweep * 5.5f : 10.4f, hpoct = sweep > 0.0f ? 3.0f + sweep * 6.0f : 0.0f;
         float lfo = P.g[G_LFO_DEST] == 5 ? lfo_val * kn(P.g[G_LFO_DEPTH]) * 2.0f : 0.0f;
@@ -998,8 +1229,8 @@ static void fx_render(int ns)
                 rr = a[1] + a[3] * 0.6f;
                 (void)REV_AP;
             }
-            l = bufL[i] + il * 0.8f + rl * 0.6f;
-            r = bufR[i] + ir * 0.8f + rr * 0.6f;
+            l = bufL[i] + (il * 0.8f + rl * 0.6f) * duck_g[i];
+            r = bufR[i] + (ir * 0.8f + rr * 0.6f) * duck_g[i];
             /* the DJ filter */
             l = svf_lp(&sweep_f[0], l, lpf, q);
             r = svf_lp(&sweep_f[1], r, lpf, q);
@@ -1010,6 +1241,15 @@ static void fx_render(int ns)
                 r -= hp_y[1];
             }
             (void)hp_x;
+            if (comp > 0.0f) {           /* the compressor: a peak follower, the gain in dB */
+                float pk = fm_maxf(fm_fabsf(l), fm_fabsf(r)), over, gdb;
+                comp_env += (pk - comp_env) * (pk > comp_env ? comp_a : comp_r);
+                over = 6.0206f * fm_log2f(comp_env + 1e-6f) - thr;
+                gdb = (over > 0.0f ? -over * slope : 0.0f) + makeup;
+                gdb = fm_exp2f(gdb * 0.16609640f);
+                l *= gdb;
+                r *= gdb;
+            }
             w = 1.0f / fm_minf(drive, 1.8f);
             l = sat(l * drive) * w * vol;
             r = sat(r * drive) * w * vol;
@@ -1073,6 +1313,7 @@ void tun_render(float *out, uint32_t n)
             arp_acc = 1.0f;
             arp_pos = -1;
         }
+        duck_run(ns);
         kick_render(ns);
         snare_render(ns);
         hats_render(ns);
@@ -1080,6 +1321,7 @@ void tun_render(float *out, uint32_t n)
         bass_render(ns);
         stab_render(ns);
         bell_render(ns);
+        synth_render(ns);
         fx_render(ns);
         for (i = 0; i < ns; i++) {
             float l = bufL[i], r = bufR[i];
@@ -1104,6 +1346,8 @@ void tun_init(void)
         hat_ph[i] = 0.17f * (float)i;
     for (i = 0; i < TUN_TRACKS; i++)
         step_now[i] = -1;
+    for (i = 0; i < (int)CHO_LEN; i++)
+        cho_mem[i] = 0.0f;
     (void)coef;
 }
 void tun_set_preset(const tun_preset_t *p)
@@ -1133,7 +1377,7 @@ int tun_playing(void) { return playing; }
 void tun_mute(int track, int on)
 {
     if (track >= 0 && track < TUN_TRACKS)
-        mutes = (uint8_t)(on ? mutes | 1u << track : mutes & ~(1u << track));
+        mutes = (uint16_t)(on ? mutes | 1u << track : mutes & ~(1u << track));
 }
 int tun_muted(int track) { return track >= 0 && track < TUN_TRACKS ? mutes >> track & 1 : 0; }
 int tun_step_now(int track) { return track >= 0 && track < TUN_TRACKS && playing ? step_now[track] : -1; }
@@ -1163,6 +1407,6 @@ void tun_arp(int track, const int8_t *notes, int n, int on)
     for (i = 0; i < n; i++)
         arp_notes[i] = notes[i];
     arp_n = (uint8_t)n;
-    arp_track = (uint8_t)(track & 7);
+    arp_track = (uint8_t)(track >= 0 && track < TUN_TRACKS ? track : 0);
     arp_on = (uint8_t)(on != 0);
 }

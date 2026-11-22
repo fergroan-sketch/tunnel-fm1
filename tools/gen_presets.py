@@ -5,9 +5,11 @@ import random, json, os
 
 NAME_LEN = 11
 STEPS = 32
-KICK, SNARE, CH, OH, PERC, BASS, STAB, BELL = range(8)
+KICK, SNARE, CH, OH, PERC, BASS, STAB, BELL, SYNTH = range(9)
+NTRACKS = 9
 # globals, in tun.h's order
-G = "bpm swing key dly_time dly_fb dly_tone rev_size rev_damp sweep drive volume lfo_rate lfo_depth lfo_dest lfo_shape".split()
+G = ("bpm swing key dly_time dly_fb dly_tone rev_size rev_damp sweep drive volume lfo_rate lfo_depth lfo_dest lfo_shape "
+     "comp duck duck_rel").split()
 MINOR_PENT = [0, 3, 5, 7, 10]
 MINOR = [0, 2, 3, 5, 7, 8, 10]
 PHRYG = [0, 1, 3, 5, 7, 8, 10]
@@ -19,9 +21,10 @@ class Pre:
         self.name = name
         self.r = rng
         self.g = dict(bpm=134, swing=50, key=9, dly_time=4, dly_fb=50, dly_tone=60, rev_size=70, rev_damp=60, sweep=64,
-                      drive=20, volume=100, lfo_rate=4, lfo_depth=0, lfo_dest=0, lfo_shape=0)
+                      drive=20, volume=100, lfo_rate=4, lfo_depth=0, lfo_dest=0, lfo_shape=0, comp=0, duck=0,
+                      duck_rel=40)
         self.t = []
-        for i in range(8):
+        for i in range(NTRACKS):
             self.t.append(dict(snd=[64] * 8, level=100, pan=64, dly=0, rev=0, len=16, div=0, root=0,
                                st=[(0, 0)] * STEPS))
     def snd(self, tr, *v):
@@ -100,6 +103,13 @@ def bell(p, mode=None, ratio=None, tone=60, dec=50, cut=70, warble=40, octv=2, s
     p.snd(BELL, r.choice([0, 1]) if mode is None else mode, r.choice([2, 3, 4, 7]) if ratio is None else ratio,
           tone + r.randint(-15, 15), dec + r.randint(-10, 15), cut + r.randint(-15, 15), warble, octv, spread)
     p.mix(BELL, level, 64, dly, rev)
+
+# the synth: WAVE 0 saw 1 pulse 2 swept pulse 3 swept saw ("hoover") 4 saw+sub 5 square+sub 6 sines 7 sine+saw
+def synth(p, wave=0, cut=60, res=30, env=50, att=0, dec=50, sus=60, cho=80, level=80, pan=64, dly=30, rev=40):
+    r = p.r
+    p.snd(SYNTH, wave, cut + r.randint(-6, 6), res + r.randint(-6, 6), env + r.randint(-8, 8), att, dec + r.randint(-6, 6),
+          sus, cho)
+    p.mix(SYNTH, level, pan, dly, rev)
 
 # --- styles ---------------------------------------------------------------------------------------------------------
 def style_hard(p):
@@ -320,39 +330,94 @@ def style_dub(p):
     bell(p, level=50)
     p.loop(BELL, 16, {})
 
+def style_synth(p):
+    """the synth up front: hoover riffs, brass stabs, swept-pulse pads, plucks and sine leads over a stripped kit"""
+    r = p.r
+    kind = p.idx % 5
+    scale = r.choice([MINOR, PHRYG])
+    p.g.update(bpm=r.randint(130, 140), swing=r.choice([50, 52]), dly_time=r.choice([3, 4, 6]), dly_fb=r.randint(35, 60),
+               rev_size=r.randint(65, 100))
+    kit(p, hard=0.7 if kind == 0 else 0.5, ride=kind == 2, clap=r.random() < 0.5)
+    p.loop(KICK, 16, four(2))
+    p.loop(SNARE, 16, {4: 1, 12: 2} if kind != 2 else {12: 1})
+    p.loop(CH, 16, hats16(r))
+    p.loop(OH, 16, offbeats(1))
+    p.loop(PERC, 16, {})
+    bass(p, wave=r.choice([3, 3, 4, 0]), cut=30, res=30, env=40, dec=45, drive=30)
+    p.loop(BASS, 16, {i: (1, 0) for i in [2, 6, 10, 14] if r.random() < 0.85})
+    stab(p, level=60)
+    p.loop(STAB, 16, {})
+    bell(p, level=50)
+    p.loop(BELL, 16, {})
+    if kind == 0:                       # the hoover: a swept saw, chorus full, a riff that leaps octaves
+        synth(p, wave=3, cut=88, res=18, env=30, att=0, dec=55, sus=95, cho=120, level=78, dly=40, rev=45)
+        sl = r.choice([16, 16, 12])
+        riff = {0: (2, 0), 3: (1, 0), 6: (2, 12), 8: (1, r.choice([-2, 3])), 11: (2, 0), 14: (1, r.choice([7, 10, 12]))}
+        p.loop(SYNTH, sl, {k: v for k, v in riff.items() if k < sl})
+    elif kind == 1:                     # brass stabs: saw and sub, the envelope snapping the filter open
+        synth(p, wave=4, cut=34, res=30, env=82, att=6, dec=36, sus=30, cho=70, level=76, dly=50, rev=40)
+        hits = sorted(r.sample([0, 3, 6, 7, 10, 11, 13, 14], r.randint(3, 4)))
+        p.loop(SYNTH, 16, {h: (r.choice([1, 2]), r.choice([0, 0, 3, -2])) for h in hits})
+    elif kind == 2:                     # a pad: swept pulse, slow in and out, one chord tone a bar
+        synth(p, wave=2, cut=58, res=20, env=25, att=80, dec=95, sus=110, cho=110, level=74, dly=20, rev=90)
+        tones = r.choice([[0, 3, 7, -2], [0, -2, -4, -5], [0, 5, 3, 0]])
+        p.loop(SYNTH, 32, {8 * j: (1, tones[j]) for j in range(4)}, div=1)
+    elif kind == 3:                     # a pluck: a square and its sub, short, rolling at an odd length
+        synth(p, wave=5, cut=40, res=55, env=70, att=0, dec=28, sus=0, cho=50, level=74, dly=70, rev=50)
+        sl = r.choice([5, 7, 9, 11])
+        notes = scale_walk(r, sl, scale, span=2)
+        p.loop(SYNTH, sl, {i: (r.choice([1, 2]), notes[i]) for i in range(sl) if r.random() < 0.7})
+    else:                               # a sine lead: pure and glassy, through the delay
+        synth(p, wave=r.choice([6, 7]), cut=80, res=10, env=20, att=12, dec=45, sus=70, cho=60, level=72, dly=80, rev=60)
+        sl = r.choice([7, 9, 12])
+        notes = scale_walk(r, sl, scale, span=2, start=4)
+        p.loop(SYNTH, sl, {i: (1, notes[i]) for i in euclid(r.choice([3, 4]), sl)}, div=r.choice([0, 1]))
+
 STYLES = [  # name, function, count, name words
-    ("Hard tools", style_hard, 16, "STEEL TORQUE MOTOR PISTON FORGE RIVET ANVIL GIRDER BOLT FURNACE DYNAMO TURBINE "
+    ("Hard tools", style_hard, 13, "STEEL TORQUE MOTOR PISTON FORGE RIVET ANVIL GIRDER BOLT FURNACE DYNAMO TURBINE "
      "CRANK CHASSIS GEAR LATHE"),
-    ("Hypnotic loops", style_hypnotic, 16, "TUNNEL SPIRAL ORBIT HELIX VORTEX LOOP CIRCUIT RELAY MOBIUS GYRE COIL "
+    ("Hypnotic loops", style_hypnotic, 13, "TUNNEL SPIRAL ORBIT HELIX VORTEX LOOP CIRCUIT RELAY MOBIUS GYRE COIL "
      "RECURSE DRIFT TRANCE PENDULUM CYCLE"),
-    ("Stab grooves", style_stab, 14, "SIGNAL CHORD MEMO PULSE TRANSIT CROSSING AVENUE GRID BLOCK SUBWAY CORNER "
+    ("Stab grooves", style_stab, 12, "SIGNAL CHORD MEMO PULSE TRANSIT CROSSING AVENUE GRID BLOCK SUBWAY CORNER "
      "STATION DISTRICT SECTOR"),
-    ("Ride grooves", style_ride, 12, "CYMBAL FLOAT GLIDE CRUISE SWAY TIDE RIPPLE SHIMMER RIDE BREEZE CURRENT FLOW"),
-    ("Bell polymeters", style_bells, 14, "CHIME BEACON LATTICE PRISM CRYSTAL TOWER CLOCK QUARTZ ASTRAL CELESTE "
+    ("Ride grooves", style_ride, 11, "CYMBAL FLOAT GLIDE CRUISE SWAY TIDE RIPPLE SHIMMER RIDE BREEZE CURRENT FLOW"),
+    ("Bell polymeters", style_bells, 12, "CHIME BEACON LATTICE PRISM CRYSTAL TOWER CLOCK QUARTZ ASTRAL CELESTE "
      "HALO RINGS TEMPLE SPIRE"),
-    ("Acid and slides", style_acid, 12, "ACIDITY CORRODE ETCH SOLVENT REACTOR CATALYST ION ALKALI OXIDE ENZYME "
+    ("Acid and slides", style_acid, 11, "ACIDITY CORRODE ETCH SOLVENT REACTOR CATALYST ION ALKALI OXIDE ENZYME "
      "TOXIN VAPOR"),
     ("Sci-fi", style_scifi, 12, "QUASAR NEUTRON PULSAR NEBULA ZENITH VECTOR PROBE ORBITER TELEMETRY RADAR "
      "SATELLITE COSMOS"),
     ("Broken and toms", style_broken, 12, "FRACTURE SPLINTER RUPTURE FAULT TREMOR SEISMIC JOLT SHATTER STUTTER "
      "SKIP SCATTER BREAK"),
-    ("Warehouse", style_warehouse, 12, "BUNKER CONCRETE SILO HANGAR DOCK BASEMENT VAULT SHAFT DEPOT CELLAR "
+    ("Warehouse", style_warehouse, 10, "BUNKER CONCRETE SILO HANGAR DOCK BASEMENT VAULT SHAFT DEPOT CELLAR "
      "TERMINAL BOILER"),
     ("Dub and deep", style_dub, 7, "DEPTH ABYSS FATHOM SONAR UNDERTOW MIST HAZE"),
+    ("Synth", style_synth, 14, "HOOVER BRASS VAPOUR PLUCK GLASS SIREN HORN AURORA FILAMENT MIRAGE ENGINE FANFARE "
+     "NIMBUS FLARE"),
 ]
 
 def init_preset():
     p = Pre("INIT", random.Random(0))
-    p.g.update(bpm=130, dly_fb=40, rev_size=60, drive=10)
+    p.g.update(bpm=130, dly_fb=40, rev_size=60, drive=10, comp=20, duck=30)
     kit(p, hard=0.5)
     p.loop(KICK, 16, four(2))
     p.loop(CH, 16, offbeats(1))
     bass(p, wave=0)
     stab(p, chord=0)
     bell(p, mode=1)
-    for tr in (SNARE, OH, PERC, BASS, STAB, BELL):
+    synth(p, wave=0)
+    for tr in (SNARE, OH, PERC, BASS, STAB, BELL, SYNTH):
         p.loop(tr, 16, {})
     return p
+
+def dynamics(p, cat):
+    """the compressor and the kick's duck, after the style's recipe (their own random numbers, so the recipes'
+    sounds and loops are what they were in 0.1)"""
+    r = random.Random(sum(ord(c) for c in p.name) * 131 + 17)
+    hard = cat in ("Hard tools", "Warehouse", "Acid and slides")
+    p.g["comp"] = r.randint(40, 70) if hard else r.randint(20, 45)
+    p.g["duck"] = r.randint(35, 70) if cat not in ("Dub and deep",) else r.randint(20, 40)
+    p.g["duck_rel"] = r.randint(25, 55)
 
 def build():
     bank = [("INIT", init_preset())]
@@ -366,7 +431,9 @@ def build():
             used.add(name)
             p = Pre(name, random.Random(hash(name) & 0xFFFFFFFF if False else sum(ord(c) * (k + 7) for k, c in enumerate(name)) * 7919 + i))
             p.g["key"] = p.r.choice([9, 9, 2, 4, 7, 0, 5, 10])
+            p.idx = i
             fn(p)
+            dynamics(p, cat)
             bank.append((cat, p))
     assert len(bank) == 128, len(bank)
     return bank
@@ -384,7 +451,7 @@ def c_preset(p):
         steps = ", ".join("{%d, %d}" % s for s in t["st"])
         tr.append("{{%s}, %d, %d, %d, %d, %d, %d, %d, 0, {%s}}" % (", ".join(str(x) for x in t["snd"]), t["level"],
                   t["pan"], t["dly"], t["rev"], t["len"], t["div"], t["root"], steps))
-    return '{"%s", {%s}, {0, 0, 0, 0}, {%s}},' % (p.name, ", ".join(str(x) for x in g), ",\n  ".join(tr))
+    return '{"%s", {%s}, {0}, {%s}},' % (p.name, ", ".join(str(x) for x in g), ",\n  ".join(tr))
 
 def main():
     bank = build()
@@ -393,7 +460,7 @@ def main():
         for cat, p in bank:
             f.write(c_preset(p) + "\n")
     with open("PRESETS.md", "w") as f:
-        f.write("# TUNNEL FM-1 presets\n\n128 presets, 000 to 127, by style. Each is a whole machine: the eight "
+        f.write("# TUNNEL FM-1 presets\n\n128 presets, 000 to 127, by style. Each is a whole machine: the nine "
                 "tracks' sounds and loops, the tempo, the swing, the key and the effects. tools/gen_presets.py makes "
                 "them from a recipe for each style; none is copied from a record or another instrument.\n")
         last = None
@@ -401,7 +468,7 @@ def main():
             if cat != last:
                 f.write("\n## %s\n\n" % cat)
                 last = cat
-            lens = [p.t[k]["len"] for k in range(8)]
+            lens = [p.t[k]["len"] for k in range(NTRACKS)]
             poly = sorted(set(l for l in lens if l not in (16, 8, 32)))
             f.write("- %03d %s (%d BPM%s)\n" % (i, p.name, p.g["bpm"],
                     ", loops of " + " and ".join(str(x) for x in poly) + " steps" if poly else ""))
