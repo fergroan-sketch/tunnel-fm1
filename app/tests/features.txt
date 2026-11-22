@@ -1,7 +1,7 @@
 # TUNNEL FM-1 features in the host simulator
 wait 600
 master 3600
-# --- decks: GLO twice is DECKS; deck C (the bell) from 017 TUNNEL, deck B (bass, stab) from 059 CHIME
+# --- decks: GLO twice is DECKS; deck C (the bell and the synth) from 017 HELIX, deck B (bass, stab) from 059 CELESTE
 tap GLO
 wait 30
 tap GLO
@@ -42,7 +42,7 @@ turn K3 1
 wait 120
 wait 30
 expect deck2 17
-expect len7 13
+expect len7 7
 expect len0 16
 turn K2 1
 wait 120
@@ -268,3 +268,38 @@ wait 2000
 tap PLAY
 wait 60
 expect playing 0
+# --- 0.2: the synth is the ninth track; black keys select, white keys mute
+tap HOME
+wait 30
+tapkey b8 100
+wait 30
+expect track 8
+tapkey w8 100
+wait 30
+expect mute8 1
+tapkey w8 100
+wait 30
+expect mute8 0
+# --- the synth on the keys
+tap REC
+wait 30
+expect keys 1
+tapkey w4 100
+wait 200
+shot synthkeys.png
+tap REC
+wait 30
+expect keys 0
+# --- FX's fourth page: DYNAMICS (COMP, DUCK, DUCK REL)
+tap FX
+wait 30
+tap FX
+wait 30
+tap FX
+wait 30
+tap FX
+wait 30
+expect page 12
+turn K2 5
+wait 120
+shot dynamics.png

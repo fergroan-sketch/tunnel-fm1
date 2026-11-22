@@ -1,20 +1,20 @@
 /* SPDX-License-Identifier: MPL-2.0 */
-/* TUNNEL FM-1: a hard, hypnotic Detroit techno machine for the M-VAVE FM-1. Eight synthesized tracks (kick, snare /
- * clap, closed hat, open hat / ride, percussion, bass, chord stab, bell), each with its own loop length and rate, so
- * loops roll against each other; three decks that load their tracks from any preset on the next bar; a delay, a
+/* TUNNEL FM-1: a hard, hypnotic Detroit techno machine for the M-VAVE FM-1. Nine synthesized tracks (kick, snare /
+ * clap, closed hat, open hat / ride, percussion, bass, chord stab, bell, a four-voice synth), each with its own loop
+ * length and rate, so loops roll against each other; three decks that load their tracks from any preset on the next bar; a delay, a
  * reverb, a DJ filter and the TUNNEL macro. No samples: every sound is made here. Pure C, single-precision float, no
  * allocation: runs on the FM-1 and on a computer alike. */
 #pragma once
 #include <stdint.h>
 
 #define TUN_SR 44100.0f
-#define TUN_TRACKS 8
+#define TUN_TRACKS 9
 #define TUN_STEPS 32                     /* a track's loop: 1 .. 32 steps */
 #define TUN_NAME_LEN 12
 #define TUN_NSND 8                       /* sound parameters a track */
 
-enum { TK_KICK, TK_SNARE, TK_CH, TK_OH, TK_PERC, TK_BASS, TK_STAB, TK_BELL };
-/* the decks: A the drums (tracks 0-4), B bass and stab (5, 6), C the bell (7) */
+enum { TK_KICK, TK_SNARE, TK_CH, TK_OH, TK_PERC, TK_BASS, TK_STAB, TK_BELL, TK_SYNTH };
+/* the decks: A the drums (tracks 0-4), B bass and stab (5, 6), C the bell and the synth (7, 8) */
 enum { DECK_A, DECK_B, DECK_C, NDECKS };
 
 /* a step, two bytes: flags (on, velocity 0..3, ratchet 0..3 = 1..4 hits, probability 0..3 = 100 75 50 25 %, slide)
@@ -45,15 +45,19 @@ enum { G_BPM, G_SWING, G_KEY,            /* BPM 60..200, swing 0..100 (50: strai
        G_REV_SIZE, G_REV_DAMP,           /* reverb */
        G_SWEEP, G_DRIVE, G_VOLUME,       /* master: the DJ filter (64 open; below low-pass, above high-pass) */
        G_LFO_RATE, G_LFO_DEPTH, G_LFO_DEST, G_LFO_SHAPE,   /* the motion LFO (sync); DEST 0 off 1 bass 2 stab 3 bell
-                                                           * 4 all three cutoffs 5 sweep 6 hats' tone */
+                                                           * 4 all four cutoffs 5 sweep 6 hats' tone 7 synth */
+       G_COMP,                           /* the master compressor: 0 off .. 127 squashed */
+       G_DUCK, G_DUCK_REL,               /* the kick ducks the bass, stab, bell, synth and the returns: depth, and
+                                          * its recovery (a 16th .. half a bar) */
        G_N };
 
 typedef struct {
     char name[TUN_NAME_LEN];
     uint8_t g[G_N];
-    uint8_t rsv[32 - TUN_NAME_LEN - G_N];
+    uint8_t rsv[32 - TUN_NAME_LEN - G_N];   /* (0.2's COMP, DUCK and DUCK REL came from here: 0 in a 0.1 preset) */
     tun_track_t t[TUN_TRACKS];
-} tun_preset_t;                          /* 672 bytes */
+} tun_preset_t;                          /* 752 bytes */
+#define TUN_PRESET_01 (sizeof(tun_preset_t) - sizeof(tun_track_t))   /* a 0.1 preset: the same, without the synth */
 
 /* each kind of track's sound parameters: name and top value (bottom 0) */
 extern const char *const TUN_SND_NAME[TUN_TRACKS][TUN_NSND];
@@ -85,7 +89,7 @@ int tun_beat(void);                      /* 0..15 sixteenths in the bar, for the
 float tun_level(int track);              /* each track's envelope now, for the screen */
 
 void tun_morph(int v);                   /* the TUNNEL macro 0..127 */
-void tun_note_on(int track, int note, int vel);   /* live: the melodic tracks (bass, stab, bell), any drum */
+void tun_note_on(int track, int note, int vel);   /* live: the melodic tracks (bass, stab, bell, synth), any drum */
 void tun_note_off(int track, int note);
 void tun_clock(int rt);                  /* MIDI real time in: 0xF8 0xFA 0xFB 0xFC */
 int tun_clock_out(uint8_t *rt);          /* the next real-time byte to send, 0 none */

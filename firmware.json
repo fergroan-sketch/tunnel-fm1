@@ -5,7 +5,7 @@
   "author": "Fergus",
   "license": "MPL-2.0",
   "tagline": "a hard, hypnotic Detroit techno machine for the FM-1",
-  "description": "A hard, hypnotic Detroit techno machine: eight synthesized tracks (909-style kick, snare and clap, hats and ride, percussion, a slide bass, chord stabs and bells), each looping at its own length and rate so patterns roll against each other, three decks that cut between presets on the bar, a ping-pong delay, a reverb, a DJ filter and the TUNNEL macro. 128 presets.",
+  "description": "A hard, hypnotic Detroit techno machine: nine synthesized tracks (909-style kick, snare and clap, hats and ride, percussion, a slide bass, chord stabs, bells and a four-voice synth with a swept saw, PWM, sines and chorus), each looping at its own length and rate so patterns roll against each other, three decks that cut between presets on the bar, a ping-pong delay, a reverb, a DJ filter, a bus compressor, a kick duck and the TUNNEL macro. 128 presets.",
   "tags": ["groovebox", "drum-machine", "sequencer"],
   "install": "https://fergroan-sketch.github.io/tunnel-fm1/install/",
   "source": "https://github.com/fergroan-sketch/tunnel-fm1",

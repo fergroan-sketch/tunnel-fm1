@@ -5,14 +5,15 @@
  *   SELECT   the track (SEL: the next one)    ALGO     TUNNEL, the macro: the filter closes, the delay and the
  *                                                      reverb swell
  *   HOME     the loops: every track's steps and where it is; K1..K4 SWEEP, FEEDBACK, BPM, DRIVE
- *            white keys F3..F4: mute the eight tracks; G4..G5: select a track
+ *            away from SEQ and REC, the white keys F3..G4 mute the nine tracks, the black keys F#3..C#5 select one
  *   SEQ      the selected track's steps on the 16 white keys (OCT- / OCT+: steps 1-16 / 17-32); K1..K4 LENGTH, RATE,
  *            ROTATE, ROOT; hold a step and K1..K4 are its NOTE, VELOCITY, RATCHET, CHANCE (SEQ while holding: slide)
  *   EDIT     the selected track's sound, two pages        ENV  its mix: LEVEL, PAN, DELAY, REVERB
- *   FX       DELAY > REVERB > MASTER                       LFO  the motion LFO: RATE, DEPTH, DEST, SHAPE
- *   GLO      TEMPO (BPM, SWING, KEY, CLOCK) > DECKS (A drums, B bass and stab, C bell: each from any preset, on the
- *            next bar) > SETUP
- *   REC      the keys play the selected track (bass, stab, bell: chromatic; drums: hit); ARP: arpeggiate them
+ *   FX       DELAY > REVERB > MASTER > DYNAMICS (COMP, DUCK, DUCK REL)
+ *   LFO      the motion LFO: RATE, DEPTH, DEST, SHAPE
+ *   GLO      TEMPO (BPM, SWING, KEY, CLOCK) > DECKS (A drums, B bass and stab, C bell and synth: each from any
+ *            preset, on the next bar) > SETUP
+ *   REC      the keys play the selected track (bass, stab, bell, synth: chromatic; drums: hit); ARP: arpeggiate
  *   SAVE     into a user slot (U01..U32): the one playing, or the first free one
  *
  * Part of the unity build (device/unity.c, host/plat_host.c), after the platform: gfx.c and announce.c are in
@@ -28,27 +29,58 @@ static const tun_preset_t FACTORY[] = {
 #define NUSER 32
 #define PER_OBJ 4
 #define NPRESET (NFACTORY + NUSER)
-#define USER_MAGIC 0x54554E31u           /* "TUN1" */
+#define USER_MAGIC 0x54554E32u           /* "TUN2": nine tracks */
+#define USER_MAGIC_01 0x54554E31u        /* "TUN1": 0.1's, eight */
 typedef struct {
     uint32_t magic;
     tun_preset_t p[PER_OBJ];
 } ublock_t;
 static PLAT_POOL ublock_t ub[NUSER / PER_OBJ];
 _Static_assert(sizeof(ublock_t) <= PLAT_STORE_MAX, "a block of user presets fits a store object");
-_Static_assert(sizeof(tun_preset_t) == 672, "a preset is 672 bytes");
+_Static_assert(sizeof(tun_preset_t) == 752, "a preset is 752 bytes");
+_Static_assert(TUN_PRESET_01 == 672, "0.1's preset was 672 bytes");
+
+static void synth_quiet(tun_track_t *t)  /* the synth of a preset from 0.1: there, silent, nothing in its loop */
+{
+    uint32_t i;
+    uint8_t *x = (uint8_t *)t;
+    for (i = 0; i < sizeof *t; i++)
+        x[i] = 0;
+    t->level = 80;
+    t->pan = 64;
+    t->len = 16;
+    t->snd[1] = 60;                      /* CUTOFF */
+    t->snd[3] = 50;                      /* ENV */
+    t->snd[5] = 50;                      /* DECAY */
+    t->snd[6] = 60;                      /* SUSTAIN */
+    t->snd[7] = 80;                      /* CHORUS */
+}
 
 static void users_load(void)
 {
-    int b;
-    for (b = 0; b < NUSER / PER_OBJ; b++)
-        if (plat_store_load(OBJ_USER0 + (uint32_t)b, &ub[b], sizeof ub[b]) != (int)sizeof ub[b]
-            || ub[b].magic != USER_MAGIC) {
-            uint32_t i;
-            uint8_t *x = (uint8_t *)&ub[b];
-            for (i = 0; i < sizeof ub[b]; i++)
-                x[i] = 0;
+    int b, k;
+    for (b = 0; b < NUSER / PER_OBJ; b++) {
+        uint32_t i;
+        uint8_t *x = (uint8_t *)&ub[b];
+        int n = plat_store_load(OBJ_USER0 + (uint32_t)b, &ub[b], sizeof ub[b]);
+        if (n == (int)sizeof ub[b] && ub[b].magic == USER_MAGIC)
+            continue;
+        if (n == (int)(4u + PER_OBJ * TUN_PRESET_01) && ub[b].magic == USER_MAGIC_01) {
+            /* saved by 0.1: four presets of 672 bytes, packed; spread them out from the last, each gets a synth */
+            for (k = PER_OBJ - 1; k >= 0; k--) {
+                const uint8_t *from = x + 4u + (uint32_t)k * TUN_PRESET_01;
+                uint8_t *to = (uint8_t *)&ub[b].p[k];
+                for (i = TUN_PRESET_01; i-- > 0;)
+                    to[i] = from[i];
+                synth_quiet(&ub[b].p[k].t[TK_SYNTH]);
+            }
             ub[b].magic = USER_MAGIC;
+            continue;
         }
+        for (i = 0; i < sizeof ub[b]; i++)
+            x[i] = 0;
+        ub[b].magic = USER_MAGIC;
+    }
 }
 static tun_preset_t *user_slot(int u) { return &ub[(u / PER_OBJ) % (NUSER / PER_OBJ)].p[u % PER_OBJ]; }
 static int user_used(int u) { return user_slot(u)->name[0] != 0; }
@@ -199,7 +231,7 @@ enum {
     KN_CLKSRC = 60, KN_CLKOUT, KN_MIDICH, KN_DRUMCH,
 };
 enum { PG_HOME, PG_SEQ, PG_SND1, PG_SND2, PG_MIX, PG_DLY, PG_REV, PG_MASTER, PG_LFO, PG_TEMPO, PG_DECKS, PG_SETUP,
-       NPAGES };
+       PG_DYN, NPAGES };                 /* (DYNAMICS last: 0.1's pages keep their numbers) */
 typedef struct {
     const char *title;
     int16_t k[4];
@@ -212,7 +244,8 @@ static const page_t PAGES[NPAGES] = {
     [PG_MIX] = {"MIX", {KN_MIX + 0, KN_MIX + 1, KN_MIX + 2, KN_MIX + 3}},
     [PG_DLY] = {"DELAY", {KN_G + G_DLY_TIME, KN_G + G_DLY_FB, KN_G + G_DLY_TONE, KN_NONE}},
     [PG_REV] = {"REVERB", {KN_G + G_REV_SIZE, KN_G + G_REV_DAMP, KN_NONE, KN_NONE}},
-    [PG_MASTER] = {"MASTER", {KN_G + G_SWEEP, KN_G + G_DRIVE, KN_G + G_VOLUME, KN_NONE}},
+    [PG_MASTER] = {"MASTER", {KN_G + G_SWEEP, KN_G + G_DRIVE, KN_G + G_VOLUME, KN_G + G_COMP}},
+    [PG_DYN] = {"DYNAMICS", {KN_G + G_COMP, KN_G + G_DUCK, KN_G + G_DUCK_REL, KN_NONE}},
     [PG_LFO] = {"MOTION LFO", {KN_G + G_LFO_RATE, KN_G + G_LFO_DEPTH, KN_G + G_LFO_DEST, KN_G + G_LFO_SHAPE}},
     [PG_TEMPO] = {"TEMPO", {KN_G + G_BPM, KN_G + G_SWING, KN_G + G_KEY, KN_CLKSRC}},
     [PG_DECKS] = {"DECKS", {KN_DECK + 0, KN_DECK + 1, KN_DECK + 2, KN_NONE}},
@@ -236,6 +269,9 @@ static struct {
 } ui = {.held_step = -1};
 
 static const char *const DECK_NAME[NDECKS] = {"DECK A", "DECK B", "DECK C"};
+/* the white keys of the 27: F3 G3 A3 B3 C4 D4 E4 F4 G4 A4 B4 C5 D5 E5 F5 G5; the black: F#3 G#3 A#3 C#4 D#4 F#4 G#4
+ * A#4 C#5 D#5 F#5 */
+static const uint8_t WHITE[16] = PLAT_WHITE_KEYS, BLACK[11] = PLAT_BLACK_KEYS;
 
 static void int_text(int32_t v, char *b)
 {
@@ -455,15 +491,16 @@ static void value_text(int id, int v, char *t)
     static const char *const PROB[4] = {"100%", "75%", "50%", "25%"};
     static const char *const DTIME[8] = {"1/32", "1/16", "1/16T", "1/8", "3/16", "1/4", "3/8", "1/2"};
     static const char *const LRATE[10] = {"2 BAR", "1 BAR", "1/2", "3/8", "1/4", "3/16", "1/8", "3/32", "1/16", "1/32"};
-    static const char *const LDEST[7] = {"OFF", "BASS", "STAB", "BELL", "ALL", "SWEEP", "HATS"};
+    static const char *const LDEST[8] = {"OFF", "BASS", "STAB", "BELL", "ALL", "SWEEP", "HATS", "SYNTH"};
     static const char *const LSHAPE[4] = {"TRI", "SAW", "SQUARE", "S+H"};
     static const char *const KEY[12] = {"C", "C#", "D", "D#", "E", "F", "F#", "G", "G#", "A", "A#", "B"};
     static const char *const CLK[3] = {"INT", "MIDI", "AUTO"};
     static const char *const SNARE[3] = {"SNARE", "CLAP", "RIM"};
-    static const char *const PERC[5] = {"TOM", "CONGA", "RIM", "COWBELL", "BLIP"};
-    static const char *const BWAVE[3] = {"SAW", "SQUARE", "BOTH"};
+    static const char *const PERC[6] = {"TOM", "CONGA", "RIM", "COWBELL", "BLIP", "SINE"};
+    static const char *const BWAVE[5] = {"SAW", "SQUARE", "BOTH", "SINE", "SINE+SAW"};
+    static const char *const YWAVE[8] = {"SAW", "PULSE", "PWM", "HOOVER", "SAW+SUB", "SQR+SUB", "SINE", "SINE+SAW"};
     static const char *const CHORD[8] = {"MINOR", "MIN 7", "MIN 9", "SUS 4", "FIFTHS", "MAJ 7", "ALIEN", "OCTAVES"};
-    static const char *const SWAVE[3] = {"SAW", "PULSE", "SOFT"};
+    static const char *const SWAVE[4] = {"SAW", "PULSE", "SOFT", "SINE"};
     static const char *const BMODE[2] = {"FM", "PLUCK"};
     t[0] = 0;
     if (id < 0)
@@ -472,10 +509,11 @@ static void value_text(int id, int v, char *t)
         int k = id - KN_SND;
         if (k == 0 && sel_track == TK_SNARE) { text_cat(t, SNARE[v % 3]); return; }
         if (k == 0 && sel_track == TK_OH) { text_cat(t, v ? "RIDE" : "OPEN"); return; }
-        if (k == 0 && sel_track == TK_PERC) { text_cat(t, PERC[v % 5]); return; }
-        if (k == 0 && sel_track == TK_BASS) { text_cat(t, BWAVE[v % 3]); return; }
+        if (k == 0 && sel_track == TK_PERC) { text_cat(t, PERC[v % 6]); return; }
+        if (k == 0 && sel_track == TK_BASS) { text_cat(t, BWAVE[v % 5]); return; }
+        if (k == 0 && sel_track == TK_SYNTH) { text_cat(t, YWAVE[v & 7]); return; }
         if (k == 0 && sel_track == TK_STAB) { text_cat(t, CHORD[v & 7]); return; }
-        if (k == 6 && sel_track == TK_STAB) { text_cat(t, SWAVE[v % 3]); return; }
+        if (k == 6 && sel_track == TK_STAB) { text_cat(t, SWAVE[v & 3]); return; }
         if (k == 7 && sel_track == TK_STAB) { signed_text(v - 2, t); return; }
         if (k == 0 && sel_track == TK_BELL) { text_cat(t, BMODE[v & 1]); return; }
         if (k == 6 && sel_track == TK_BELL) { signed_text(v - 1, t); return; }
@@ -489,7 +527,18 @@ static void value_text(int id, int v, char *t)
     case KN_G + G_KEY: text_cat(t, KEY[v % 12]); return;
     case KN_G + G_DLY_TIME: text_cat(t, DTIME[v & 7]); return;
     case KN_G + G_LFO_RATE: text_cat(t, LRATE[v % 10]); return;
-    case KN_G + G_LFO_DEST: text_cat(t, LDEST[v % 7]); return;
+    case KN_G + G_LFO_DEST: text_cat(t, LDEST[v & 7]); return;
+    case KN_G + G_COMP: case KN_G + G_DUCK: if (v) int_text(v, t); else text_cat(t, "OFF"); return;
+    case KN_G + G_DUCK_REL: {            /* a sixteenth .. half a bar: (0.25 .. 2) beats */
+        int c = 25 + v * 175 / 127;
+        int_text(c / 100, t);
+        text_cat(t, ".");
+        t[2 + (c >= 1000)] = (char)('0' + c / 10 % 10);
+        t[3 + (c >= 1000)] = (char)('0' + c % 10);
+        t[4 + (c >= 1000)] = 0;
+        text_cat(t, " BT");
+        return;
+    }
     case KN_G + G_LFO_SHAPE: text_cat(t, LSHAPE[v & 3]); return;
     case KN_RATE: text_cat(t, RATE[v & 3]); return;
     case KN_ROT: text_cat(t, "< >"); return;
@@ -630,11 +679,9 @@ static void keys_arp_update(uint32_t keys)
 
 static void input(void)
 {
-    static const uint8_t EDIT_P[] = {PG_SND1, PG_SND2}, FX_P[] = {PG_DLY, PG_REV, PG_MASTER},
+    static const uint8_t EDIT_P[] = {PG_SND1, PG_SND2}, FX_P[] = {PG_DLY, PG_REV, PG_MASTER, PG_DYN},
                          GLO_P[] = {PG_TEMPO, PG_DECKS, PG_SETUP}, HOME_P[] = {PG_HOME}, SEQ_P[] = {PG_SEQ},
                          MIX_P[] = {PG_MIX}, LFO_P[] = {PG_LFO};
-    /* the white keys of the 27: F3 G3 A3 B3 C4 D4 E4 F4 G4 A4 B4 C5 D5 E5 F5 G5 */
-    static const uint8_t WHITE[16] = {0, 2, 4, 6, 7, 9, 11, 12, 14, 16, 18, 19, 21, 23, 24, 26};
     uint32_t keys, btn = plat_buttons(), k, now = plat_ms(), down, up;
     int32_t e;
     touch_poll();
@@ -670,15 +717,14 @@ static void input(void)
                 ui.held_step = -1;
             }
         }
-    } else {                             /* the white keys: mutes, then the tracks */
+    } else {                             /* the white keys mute the tracks, the black keys select one */
         int w;
-        for (w = 0; w < 16; w++)
-            if (down & 1u << WHITE[w]) {
-                if (w < 8)
-                    tun_mute(w, !tun_muted(w));
-                else
-                    track_select(w - 8);
-            }
+        for (w = 0; w < TUN_TRACKS; w++) {
+            if (down & 1u << WHITE[w])
+                tun_mute(w, !tun_muted(w));
+            if (down & 1u << BLACK[w])
+                track_select(w);
+        }
     }
     for (k = 0; k < NB; k++) {
         uint32_t bit = 1u << k;
@@ -700,7 +746,7 @@ static void input(void)
             break;
         case B_EDIT: page_cycle(EDIT_P, 2); break;
         case B_ENV: page_cycle(MIX_P, 1); break;
-        case B_FX: page_cycle(FX_P, 3); break;
+        case B_FX: page_cycle(FX_P, 4); break;
         case B_LFO: page_cycle(LFO_P, 1); break;
         case B_GLO: page_cycle(GLO_P, 3); break;
         case B_SEL: track_select(sel_track + 1); break;
@@ -791,7 +837,7 @@ static void input(void)
     {                                    /* the lights */
         static const uint8_t PAGE_BTN[NPAGES] = {
             [PG_HOME] = B_HOME, [PG_SEQ] = B_SEQ, [PG_SND1] = B_EDIT, [PG_SND2] = B_EDIT, [PG_MIX] = B_ENV,
-            [PG_DLY] = B_FX, [PG_REV] = B_FX, [PG_MASTER] = B_FX, [PG_LFO] = B_LFO, [PG_TEMPO] = B_GLO,
+            [PG_DLY] = B_FX, [PG_REV] = B_FX, [PG_MASTER] = B_FX, [PG_DYN] = B_FX, [PG_LFO] = B_LFO, [PG_TEMPO] = B_GLO,
             [PG_DECKS] = B_GLO, [PG_SETUP] = B_GLO};
         uint32_t lit = btn | 1u << PAGE_BTN[ui.page], klit = 0;
         int beat = tun_beat(), w;
@@ -812,10 +858,10 @@ static void input(void)
                     klit |= 1u << WHITE[w];
             }
         } else if (!ui.keys_mode) {
-            for (w = 0; w < 8; w++)
+            for (w = 0; w < TUN_TRACKS; w++)
                 if (!tun_muted(w))
                     klit |= 1u << WHITE[w];
-            klit |= 1u << WHITE[8 + sel_track];
+            klit |= 1u << BLACK[sel_track];
         } else {
             klit = keys;
         }
@@ -837,7 +883,7 @@ void app_input_only(void) { input(); }
 #define T_KNOB RGB(34, 40, 52)
 static const uint16_t TRACK_RGB[TUN_TRACKS] = {RGB(255, 90, 70), RGB(255, 170, 70), RGB(240, 230, 120),
                                                RGB(170, 230, 120), RGB(90, 220, 170), RGB(90, 200, 255),
-                                               RGB(150, 140, 255), RGB(230, 130, 255)};
+                                               RGB(150, 140, 255), RGB(230, 130, 255), RGB(255, 120, 190)};
 
 static void draw_dial(int32_t cx, int32_t cy, int32_t rad, float f, int bip, uint16_t col)
 {
@@ -882,30 +928,30 @@ static void draw_loops(void)             /* HOME: every track's loop, the playhe
     int tr, i;
     for (tr = 0; tr < TUN_TRACKS; tr++) {
         const tun_track_t *t = &p->t[tr];
-        int32_t y = 2 + tr * 18, len = t->len, now_s = tun_step_now(tr), cw = len > 16 ? 5 : 10;
+        int32_t y = 2 + tr * 16, len = t->len, now_s = tun_step_now(tr), cw = len > 16 ? 5 : 10;
         uint16_t col = tun_muted(tr) ? T_DIM : TRACK_RGB[tr];
         char nm[5] = {0};
         for (i = 0; i < 4 && TUN_TRACK_NAME[tr][i]; i++)
             nm[i] = TUN_TRACK_NAME[tr][i];
         if (tr == sel_track)
-            cv_rect(0, y - 1, 240, 17, RGB(22, 26, 36));
+            cv_rect(0, y - 1, 240, 15, RGB(22, 26, 36));
         cv_text(4, y + 1, &FONT_XS, nm, tr == sel_track ? C_WHITE : col);
         for (i = 0; i < len && i < TUN_STEPS; i++) {
             int32_t x = 40 + i * (cw + 1) * (len > 16 ? 1 : 1);
             const tun_step_t *s = &t->st[i];
             uint16_t c = T_GRID;
-            int h = 4;
+            int h = 3;
             if (s->f & ST_ON) {
                 c = col;
                 h = 6 + 2 * (int)ST_VEL(s->f);
             }
             if (i == now_s)
                 c = C_WHITE, h = h < 8 ? 8 : h;
-            cv_rect(x, y + 14 - h, cw, h, c);
+            cv_rect(x, y + 13 - h, cw, h, c);
         }
         {                                /* the level, at the right */
-            int32_t lv = (int32_t)(tun_level(tr) * 14.0f);
-            cv_rect(232, y + 14 - lv, 4, lv, col);
+            int32_t lv = (int32_t)(tun_level(tr) * 12.0f);
+            cv_rect(232, y + 13 - lv, 4, lv, col);
         }
     }
 }
@@ -1137,12 +1183,12 @@ int app_expect(const char *what, int *got)
     else if (!strncmp(what, "mute", 4))
         *got = tun_muted(atoi(what + 4));
     else if (!strncmp(what, "len", 3))
-        *got = tun_preset()->t[atoi(what + 3) & 7].len;
-    else if (!strncmp(what, "on", 2) && what[2] >= '0' && what[2] <= '7') {   /* onT.S: track T step S on */
+        *got = tun_preset()->t[atoi(what + 3) % TUN_TRACKS].len;
+    else if (!strncmp(what, "on", 2) && what[2] >= '0' && what[2] <= '8') {   /* onT.S: track T step S on */
         int tr = what[2] - '0', s = atoi(what + 4);
         *got = tun_preset()->t[tr].st[s & 31].f & ST_ON;
     } else if (!strncmp(what, "step", 4))
-        *got = tun_step_now(atoi(what + 4) & 7);
+        *got = tun_step_now(atoi(what + 4) % TUN_TRACKS);
     else if (!strncmp(what, "g", 1) && what[1] >= '0' && what[1] <= '9')
         *got = tun_preset()->g[atoi(what + 1) % G_N];
     else
