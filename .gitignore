@@ -1,0 +1,7 @@
+# build output (tools/build.py) and the local installer site (tools/make_site.py): releases carry the .fwsc
+/app/build/
+/site/
+Open TUNNEL installer.command
+.DS_Store
+# design notes from the coordinating session and a drum-engine draft: kept here, not published
+/notes/

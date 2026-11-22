@@ -1,0 +1,19 @@
+{
+  "schema": 1,
+  "id": "tunnelfm1",
+  "name": "tunnelfm1",
+  "author": "Fergus",
+  "license": "MPL-2.0",
+  "tagline": "a hard, hypnotic Detroit techno machine for the FM-1",
+  "description": "A hard, hypnotic Detroit techno machine: eight synthesized tracks (909-style kick, snare and clap, hats and ride, percussion, a slide bass, chord stabs and bells), each looping at its own length and rate so patterns roll against each other, three decks that cut between presets on the bar, a ping-pong delay, a reverb, a DJ filter and the TUNNEL macro. 128 presets.",
+  "tags": ["groovebox", "drum-machine", "sequencer"],
+  "install": "https://fergroan-sketch.github.io/tunnel-fm1/install/",
+  "source": "https://github.com/fergroan-sketch/tunnel-fm1",
+  "screenshot": "card.png",
+  "hardware": {
+    "models": ["FM-1"],
+    "flash": ["856014", "B36014"],
+    "features": ["bluetooth-midi", "usb-audio-in", "usb-audio-out", "velocity", "pressure", "screen-reader"]
+  },
+  "credits": "Built on fm1-base and felucca-bsp. Unofficial: not affiliated with M-VAVE."
+}

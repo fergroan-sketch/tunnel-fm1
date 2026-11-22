@@ -1,0 +1,18 @@
+# TUNNEL FM-1's build settings (fm1-base tools/build.py)
+name = "TUNNELFM1"
+id_prefix = "FM-1_63"            # package identity, this firmware's own
+usb_manufacturer = "tunnelfm1"
+usb_product = "TUNNEL FM-1"
+o2 = ["tun.c"]                   # the engine, at -O2
+ble = true                       # Bluetooth MIDI (--no-ble builds without it)
+companion = false
+# the site and firmware.json
+tagline = "a hard, hypnotic Detroit techno machine for the FM-1"
+repo = "https://github.com/fergroan-sketch/tunnel-fm1"
+install = "https://fergroan-sketch.github.io/tunnel-fm1/install/"
+screenshot = "card.png"
+licence = "MPL-2.0"
+credits = "Built on fm1-base and felucca-bsp. Unofficial: not affiliated with M-VAVE."
+author = "Fergus"
+description = "A hard, hypnotic Detroit techno machine: eight synthesized tracks (909-style kick, snare and clap, hats and ride, percussion, a slide bass, chord stabs and bells), each looping at its own length and rate so patterns roll against each other, three decks that cut between presets on the bar, a ping-pong delay, a reverb, a DJ filter and the TUNNEL macro. 128 presets."
+tags = ["groovebox", "drum-machine", "sequencer"]

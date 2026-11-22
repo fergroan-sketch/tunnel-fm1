@@ -1,0 +1,270 @@
+# TUNNEL FM-1 features in the host simulator
+wait 600
+master 3600
+# --- decks: GLO twice is DECKS; deck C (the bell) from 017 TUNNEL, deck B (bass, stab) from 059 CHIME
+tap GLO
+wait 30
+tap GLO
+wait 30
+expect page 10
+expect len7 16
+turn K3 1
+wait 120
+turn K3 1
+wait 120
+turn K3 1
+wait 120
+turn K3 1
+wait 120
+turn K3 1
+wait 120
+turn K3 1
+wait 120
+turn K3 1
+wait 120
+turn K3 1
+wait 120
+turn K3 1
+wait 120
+turn K3 1
+wait 120
+turn K3 1
+wait 120
+turn K3 1
+wait 120
+turn K3 1
+wait 120
+turn K3 1
+wait 120
+turn K3 1
+wait 120
+turn K3 1
+wait 120
+wait 30
+expect deck2 17
+expect len7 13
+expect len0 16
+turn K2 1
+wait 120
+turn K2 1
+wait 120
+turn K2 1
+wait 120
+turn K2 1
+wait 120
+turn K2 1
+wait 120
+turn K2 1
+wait 120
+turn K2 1
+wait 120
+turn K2 1
+wait 120
+turn K2 1
+wait 120
+turn K2 1
+wait 120
+turn K2 1
+wait 120
+turn K2 1
+wait 120
+turn K2 1
+wait 120
+turn K2 1
+wait 120
+turn K2 1
+wait 120
+turn K2 1
+wait 120
+turn K2 1
+wait 120
+turn K2 1
+wait 120
+turn K2 1
+wait 120
+turn K2 1
+wait 120
+turn K2 1
+wait 120
+turn K2 1
+wait 120
+turn K2 1
+wait 120
+turn K2 1
+wait 120
+turn K2 1
+wait 120
+turn K2 1
+wait 120
+turn K2 1
+wait 120
+turn K2 1
+wait 120
+turn K2 1
+wait 120
+turn K2 1
+wait 120
+turn K2 1
+wait 120
+turn K2 1
+wait 120
+turn K2 1
+wait 120
+turn K2 1
+wait 120
+turn K2 1
+wait 120
+turn K2 1
+wait 120
+turn K2 1
+wait 120
+turn K2 1
+wait 120
+turn K2 1
+wait 120
+turn K2 1
+wait 120
+turn K2 1
+wait 120
+turn K2 1
+wait 120
+turn K2 1
+wait 120
+turn K2 1
+wait 120
+turn K2 1
+wait 120
+turn K2 1
+wait 120
+turn K2 1
+wait 120
+turn K2 1
+wait 120
+turn K2 1
+wait 120
+turn K2 1
+wait 120
+turn K2 1
+wait 120
+turn K2 1
+wait 120
+turn K2 1
+wait 120
+turn K2 1
+wait 120
+turn K2 1
+wait 120
+turn K2 1
+wait 120
+turn K2 1
+wait 120
+turn K2 1
+wait 120
+wait 30
+expect deck1 59
+tap PLAY
+wait 60
+wav decks.wav
+wait 4000
+wavstop
+shot decks.png
+# --- a deck load while playing waits for the bar
+turn K3 1
+wait 30
+expect deck2 18
+tap PLAY
+wait 60
+# --- SEQ: hold a step, its knobs; length and rate
+tap SEQ
+wait 30
+expect page 1
+turn K1 -1
+wait 120
+turn K1 -1
+wait 120
+turn K1 -1
+wait 120
+turn K1 -1
+wait 120
+turn K1 -1
+wait 120
+turn K1 -1
+wait 120
+turn K1 -1
+wait 120
+turn K1 -1
+wait 120
+turn K1 -1
+wait 120
+wait 30
+expect len0 7
+key w2 down 100
+wait 30
+turn K2 2
+wait 30
+turn K3 2
+wait 30
+key w2 up
+wait 30
+expect on0.2 1
+shot step.png
+# --- the sound pages and the effects
+tap EDIT
+wait 30
+expect page 2
+shot sound.png
+tap ENV
+wait 30
+expect page 4
+tap FX
+wait 30
+expect page 5
+tap LFO
+wait 30
+expect page 8
+shot lfo.png
+# --- keys: REC plays the selected track; ARP
+turn SELECT 7
+wait 30
+expect track 7
+tap REC
+wait 30
+expect keys 1
+wav keys.wav
+tapkey w4 110
+wait 400
+tapkey w6 110
+wait 600
+wavstop
+tap ARP
+wait 30
+key w0 down 100
+key w2 down 100
+key w4 down 100
+wait 1200
+key w0 up
+key w2 up
+key w4 up
+wait 200
+tap ARP
+wait 30
+tap REC
+wait 30
+expect keys 0
+# --- the TUNNEL macro and the presets, quantised while playing
+tap HOME
+wait 30
+turn ALGO 1
+wait 300
+turn ALGO 1
+wait 30
+expect morph 2
+tap PLAY
+wait 60
+turn PRESET 5
+wait 30
+expect preset 6
+wait 2000
+tap PLAY
+wait 60
+expect playing 0

@@ -1,0 +1,54 @@
+# TUNNEL FM-1 basics in the host simulator
+wait 600
+master 3600
+splashshot splash.png
+expect preset 1
+expect page 0
+expect playing 0
+tap PLAY
+wait 60
+expect playing 1
+wav loop1.wav
+wait 3000
+shot home.png
+wavstop
+tap PLAY
+wait 60
+expect playing 0
+# the SEQ page: a white key toggles a step
+tap SEQ
+wait 30
+expect page 1
+expect on0.1 0
+tapkey w1 100
+wait 30
+expect on0.1 1
+expect dirty 1
+tapkey w1 100
+wait 30
+expect on0.1 0
+shot seq.png
+# the track: SELECT, and SEL
+turn SELECT 5
+wait 30
+expect track 5
+tap SEL
+wait 30
+expect track 6
+# mutes on the white keys away from SEQ
+tap HOME
+wait 30
+tapkey w0 100
+wait 30
+expect mute0 1
+tapkey w0 100
+wait 30
+expect mute0 0
+# TUNNEL on ALGO
+turn ALGO 1
+wait 30
+expect morph 1
+# presets
+turn PRESET 1
+wait 30
+expect preset 2
